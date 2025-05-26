@@ -19,7 +19,7 @@ local Storage = ReplicatedStorage:FindFirstChild("__BSStorage") :: Folder
 local BULLET_UPDATE_INTERVAL = 0.033
 local BULLET_SPEED = 1000
 local MAX_BULLET_LIFETIME = 12
-local PROXIMITY_DETECTION_RADIUS = 2
+local PROXIMITY_DETECTION_RADIUS = 3.15
 
 -- Containers --
 local ActiveBullets = {} :: { BulletDataDecoded }
@@ -35,7 +35,7 @@ type BulletDataDecoded = {
 	CurrentPosition: Vector3,
 	TraveledDistance: number,
 	StartTime: number,
-	IsInstant: boolean?, -- Optional flag for instant bullets
+	IsInstant: boolean?,
 }
 
 type BulletData = {
@@ -90,12 +90,16 @@ local function FindNearbyHumanoid(
 	local shooterCharacter = shooterPlayer and shooterPlayer.Character
 
 	-- Check all players' characters
-	for _, player in pairs(Players:GetPlayers()) do
+	for _, player in Players:GetPlayers() do
 		if player.Character and player.Character ~= shooterCharacter then
 			local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
-			local humanoidRootPart = player.Character:FindFirstChild("HumanoidRootPart")
+			local humanoidRootPart = player.Character:FindFirstChild("HumanoidRootPart") :: BasePart?
 
 			if humanoid and humanoidRootPart then
+				if humanoid.MoveDirection == Vector3.zero or humanoid.MoveDirection.Magnitude <= 0.05 then
+					continue
+				end
+
 				local distance = (humanoidRootPart.Position - position).Magnitude
 
 				if distance <= radius and distance < closestDistance then
