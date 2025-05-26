@@ -19,7 +19,7 @@ local Storage = ReplicatedStorage:FindFirstChild("__BSStorage") :: Folder
 local BULLET_UPDATE_INTERVAL = 0.033
 local BULLET_SPEED = 1000
 local MAX_BULLET_LIFETIME = 12
-local PROXIMITY_DETECTION_RADIUS = 3.15
+local PROXIMITY_DETECTION_RADIUS = 8.5
 
 -- Containers --
 local ActiveBullets = {} :: { BulletDataDecoded }
