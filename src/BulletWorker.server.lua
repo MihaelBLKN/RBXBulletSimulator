@@ -19,6 +19,7 @@ local Storage = ReplicatedStorage:FindFirstChild("__BSStorage") :: Folder
 local BULLET_UPDATE_INTERVAL = 0.033
 local BULLET_SPEED = 1000
 local MAX_BULLET_LIFETIME = 12
+local PROXIMITY_DETECTION_RADIUS = 2
 
 -- Containers --
 local ActiveBullets = {} :: { BulletDataDecoded }
@@ -71,10 +72,49 @@ local BulletCompleteBindableEvent = Storage:FindFirstChild("BulletCompleteBindab
 local BulletHitBindableEvent = Storage:FindFirstChild("BulletHitBindableEvent") :: BindableEvent
 
 -- Functions --
+--- Finds nearby humanoids within the proximity radius of a position
+--- @param position Vector3
+--- @param shooterUserId number
+--- @param radius number
+--- @return Model?, Humanoid?, number? -- Returns the closest model, humanoid, and distance
+local function FindNearbyHumanoid(
+	position: Vector3,
+	shooterUserId: number,
+	radius: number
+): (Model?, Humanoid?, number?)
+	local closestModel = nil
+	local closestHumanoid = nil
+	local closestDistance = math.huge
+
+	local shooterPlayer = Players:GetPlayerByUserId(shooterUserId)
+	local shooterCharacter = shooterPlayer and shooterPlayer.Character
+
+	-- Check all players' characters
+	for _, player in pairs(Players:GetPlayers()) do
+		if player.Character and player.Character ~= shooterCharacter then
+			local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+			local humanoidRootPart = player.Character:FindFirstChild("HumanoidRootPart")
+
+			if humanoid and humanoidRootPart then
+				local distance = (humanoidRootPart.Position - position).Magnitude
+
+				if distance <= radius and distance < closestDistance then
+					closestDistance = distance
+					closestModel = player.Character
+					closestHumanoid = humanoid
+				end
+			end
+		end
+	end
+
+	return closestModel, closestHumanoid, closestDistance
+end
+
 --- Handles bullet hit logic.
 --- @param bulletData BulletDataDecoded
 --- @param hitResult RaycastResult?
-local function BulletHit(bulletData: BulletDataDecoded, hitResult: RaycastResult?)
+--- @param proximityHumanoid Humanoid?
+local function BulletHit(bulletData: BulletDataDecoded, hitResult: RaycastResult?, proximityHumanoid: Humanoid?)
 	local find = table.find(ActiveBullets, bulletData)
 	if find then
 		table.remove(ActiveBullets, find)
@@ -82,18 +122,31 @@ local function BulletHit(bulletData: BulletDataDecoded, hitResult: RaycastResult
 
 	BulletCompleteBindableEvent:Fire(bulletData.Id, script:GetActor())
 
-	-- If we hit a humanoid, fire the hit event
+	-- Priority: Direct hit first, then proximity hit
+	local targetHumanoid = nil
+
+	-- Check for direct raycast hit
 	if hitResult and hitResult.Instance then
 		local hitPart = hitResult.Instance
 
-		if not hitPart.Parent then
-			return
+		if hitPart.Parent then
+			targetHumanoid = hitPart.Parent:FindFirstChildOfClass("Humanoid")
+			if hitPart.Parent:IsA("Model") and targetHumanoid then
+				-- Direct hit found
+			else
+				targetHumanoid = nil
+			end
 		end
+	end
 
-		local targetHumanoid = hitPart.Parent:FindFirstChildOfClass("Humanoid")
-		if hitPart.Parent:IsA("Model") and targetHumanoid then
-			BulletHitBindableEvent:Fire(bulletData.Player, bulletData.WeaponDamage, targetHumanoid)
-		end
+	-- If no direct hit, use proximity hit
+	if not targetHumanoid and proximityHumanoid then
+		targetHumanoid = proximityHumanoid
+	end
+
+	-- Fire hit event if we have a target
+	if targetHumanoid then
+		BulletHitBindableEvent:Fire(bulletData.Player, bulletData.WeaponDamage, targetHumanoid)
 	end
 end
 
@@ -125,7 +178,35 @@ local function ProcessInstantBullet(bulletData: BulletDataDecoded)
 	local raycastResult =
 		workspace:Raycast(bulletData.OriginVector, bulletData.DirectionVector * bulletData.WeaponRange, raycastParams)
 
-	BulletHit(bulletData, raycastResult)
+	local proximityHumanoid = nil
+
+	-- If no direct hit, check for proximity hits along the bullet path
+	if
+		not (
+			raycastResult
+			and raycastResult.Instance
+			and raycastResult.Instance.Parent
+			and raycastResult.Instance.Parent:FindFirstChildOfClass("Humanoid")
+		)
+	then
+		-- Sample points along the bullet path for proximity detection
+		local totalDistance = bulletData.WeaponRange
+		local sampleInterval = PROXIMITY_DETECTION_RADIUS * 0.5 -- Sample every half radius
+		local numSamples = math.ceil(totalDistance / sampleInterval)
+
+		for i = 0, numSamples do
+			local t = i / numSamples
+			local samplePosition = bulletData.OriginVector + (bulletData.DirectionVector.Unit * totalDistance * t)
+
+			local _, nearbyHumanoid = FindNearbyHumanoid(samplePosition, bulletData.Player, PROXIMITY_DETECTION_RADIUS)
+			if nearbyHumanoid then
+				proximityHumanoid = nearbyHumanoid
+				break
+			end
+		end
+	end
+
+	BulletHit(bulletData, raycastResult, proximityHumanoid)
 end
 
 --- Updates a projectile bullet's position and checks for hits
@@ -140,13 +221,13 @@ local function UpdateProjectileBullet(bulletData: BulletDataDecoded, deltaTime: 
 	-- Check if bullet has exceeded its range
 	bulletData.TraveledDistance += moveDistance
 	if bulletData.TraveledDistance >= bulletData.WeaponRange then
-		BulletHit(bulletData, nil)
+		BulletHit(bulletData, nil, nil)
 		return true
 	end
 
 	-- Check if bullet has exceeded max lifetime
 	if tick() - bulletData.StartTime >= MAX_BULLET_LIFETIME then
-		BulletHit(bulletData, nil)
+		BulletHit(bulletData, nil, nil)
 		return true
 	end
 
@@ -155,6 +236,7 @@ local function UpdateProjectileBullet(bulletData: BulletDataDecoded, deltaTime: 
 	local moveVector = newPosition - previousPosition
 
 	local raycastResult = workspace:Raycast(previousPosition, moveVector, raycastParams)
+	local proximityHumanoid = nil
 
 	if raycastResult then
 		-- Hit something, check if it's a valid target
@@ -162,15 +244,23 @@ local function UpdateProjectileBullet(bulletData: BulletDataDecoded, deltaTime: 
 		if hitPart and hitPart.Parent then
 			-- Hit terrain or parts - stop bullet
 			if hitPart.Parent == workspace or not hitPart.Parent:IsA("Model") then
-				BulletHit(bulletData, raycastResult)
+				BulletHit(bulletData, raycastResult, nil)
 				return true
 			end
 
 			-- Hit a character
 			if hitPart.Parent:FindFirstChildOfClass("Humanoid") then
-				BulletHit(bulletData, raycastResult)
+				BulletHit(bulletData, raycastResult, nil)
 				return true
 			end
+		end
+	else
+		-- No direct hit, check for proximity hits around the current position
+		local _, nearbyHumanoid = FindNearbyHumanoid(newPosition, bulletData.Player, PROXIMITY_DETECTION_RADIUS)
+		if nearbyHumanoid then
+			proximityHumanoid = nearbyHumanoid
+			BulletHit(bulletData, nil, proximityHumanoid)
+			return true
 		end
 	end
 
