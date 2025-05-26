@@ -85,8 +85,14 @@ local function BulletHit(bulletData: BulletDataDecoded, hitResult: RaycastResult
 	-- If we hit a humanoid, fire the hit event
 	if hitResult and hitResult.Instance then
 		local hitPart = hitResult.Instance
-		if hitPart.Parent and hitPart.Parent:IsA("Model") and hitPart.Parent:FindFirstChildOfClass("Humanoid") then
-			BulletHitBindableEvent:Fire(bulletData.Player, bulletData.WeaponDamage)
+
+		if not hitPart.Parent then
+			return
+		end
+
+		local targetHumanoid = hitPart.Parent:FindFirstChildOfClass("Humanoid")
+		if hitPart.Parent:IsA("Model") and targetHumanoid then
+			BulletHitBindableEvent:Fire(bulletData.Player, bulletData.WeaponDamage, targetHumanoid)
 		end
 	end
 end
