@@ -124,14 +124,13 @@ local function BulletHit(bulletData: BulletDataDecoded, hitResult: RaycastResult
 		table.remove(ActiveBullets, find)
 	end
 
-	BulletCompleteBindableEvent:Fire(bulletData.Id, script:GetActor())
-
 	-- Priority: Direct hit first, then proximity hit
 	local targetHumanoid = nil
+	local hitPart = nil
 
 	-- Check for direct raycast hit
 	if hitResult and hitResult.Instance then
-		local hitPart = hitResult.Instance
+		hitPart = hitResult.Instance
 
 		if hitPart.Parent then
 			targetHumanoid = hitPart.Parent:FindFirstChildOfClass("Humanoid")
@@ -143,6 +142,8 @@ local function BulletHit(bulletData: BulletDataDecoded, hitResult: RaycastResult
 		end
 	end
 
+	BulletCompleteBindableEvent:Fire(bulletData.Id, script:GetActor(), hitPart)
+
 	-- If no direct hit, use proximity hit
 	if not targetHumanoid and proximityHumanoid then
 		targetHumanoid = proximityHumanoid
@@ -150,7 +151,7 @@ local function BulletHit(bulletData: BulletDataDecoded, hitResult: RaycastResult
 
 	-- Fire hit event if we have a target
 	if targetHumanoid then
-		BulletHitBindableEvent:Fire(bulletData.Player, bulletData.WeaponDamage, targetHumanoid)
+		BulletHitBindableEvent:Fire(bulletData.Player, bulletData.WeaponDamage, targetHumanoid, hitPart)
 	end
 end
 
