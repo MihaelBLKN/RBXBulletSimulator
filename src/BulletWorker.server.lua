@@ -16,7 +16,7 @@ local Actor = script:GetActor()
 local Storage = ReplicatedStorage:FindFirstChild("__BSStorage") :: Folder
 
 -- Constants --
-local BULLET_UPDATE_INTERVAL = 0.033
+local BULLET_UPDATE_INTERVAL = 0.5
 local BULLET_SPEED = 1000
 local MAX_BULLET_LIFETIME = 12
 local PROXIMITY_DETECTION_RADIUS = 4
@@ -168,6 +168,8 @@ local function CreateRaycastParams(shooterUserId: number): RaycastParams
 		table.insert(filterList, shooterPlayer.Character)
 	end
 
+	table.insert(filterList, workspace.RaycastIgnore)
+
 	task.synchronize()
 	raycastParams.FilterDescendantsInstances = filterList
 	task.desynchronize()
@@ -175,15 +177,12 @@ local function CreateRaycastParams(shooterUserId: number): RaycastParams
 	return raycastParams
 end
 
---- Processes an instant bullet (hitscan)
---- @param bulletData BulletDataDecoded
 local function ProcessInstantBullet(bulletData: BulletDataDecoded)
 	local raycastParams = CreateRaycastParams(bulletData.Player)
-
 	local raycastResult =
 		workspace:Raycast(bulletData.OriginVector, bulletData.DirectionVector * bulletData.WeaponRange, raycastParams)
-
 	local proximityHumanoid = nil
+	local proximityHit = nil
 
 	-- If no direct hit, check for proximity hits along the bullet path
 	if
@@ -196,21 +195,56 @@ local function ProcessInstantBullet(bulletData: BulletDataDecoded)
 	then
 		-- Sample points along the bullet path for proximity detection
 		local totalDistance = bulletData.WeaponRange
-		local sampleInterval = PROXIMITY_DETECTION_RADIUS * 0.5 -- Sample every half radius
+		local sampleInterval = PROXIMITY_DETECTION_RADIUS * 0.5
 		local numSamples = math.ceil(totalDistance / sampleInterval)
 
 		for i = 0, numSamples do
 			local t = i / numSamples
 			local samplePosition = bulletData.OriginVector + (bulletData.DirectionVector.Unit * totalDistance * t)
+			local model, nearbyHumanoid =
+				FindNearbyHumanoid(samplePosition, bulletData.Player, PROXIMITY_DETECTION_RADIUS)
 
-			local _, nearbyHumanoid = FindNearbyHumanoid(samplePosition, bulletData.Player, PROXIMITY_DETECTION_RADIUS)
-			if nearbyHumanoid then
-				proximityHumanoid = nearbyHumanoid
-				break
+			if nearbyHumanoid and model then
+				local rootPart = model:FindFirstChild("HumanoidRootPart") :: BasePart?
+				if rootPart then
+					-- Check if the bullet path from origin to this sample point is blocked
+					local bulletPathToSample = workspace:Raycast(
+						bulletData.OriginVector,
+						(samplePosition - bulletData.OriginVector),
+						raycastParams
+					)
+
+					if bulletPathToSample then
+						-- Bullet path is blocked before reaching this sample point, skip
+						continue
+					end
+
+					-- Now check line of sight from sample point to humanoid
+					local toHumanoid = rootPart.Position - samplePosition
+					local direction = toHumanoid.Unit
+					local distance = toHumanoid.Magnitude
+
+					local hitResult = workspace:Raycast(samplePosition, direction * distance, raycastParams)
+					if hitResult then
+						if hitResult.Instance:IsDescendantOf(model) then
+							-- Hit the humanoid directly — valid
+							proximityHumanoid = nearbyHumanoid
+							proximityHit = rootPart
+							break
+						else
+							-- Hit something else before the humanoid - blocked
+							continue
+						end
+					else
+						-- Clear line of sight to humanoid
+						proximityHumanoid = nearbyHumanoid
+						proximityHit = rootPart
+						break
+					end
+				end
 			end
 		end
 	end
-
 	BulletHit(bulletData, raycastResult, proximityHumanoid)
 end
 
